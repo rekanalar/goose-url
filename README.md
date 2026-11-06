@@ -2,7 +2,7 @@
 
 [![ci](https://github.com/rekanalar/goose-url/actions/workflows/ci.yml/badge.svg)](https://github.com/rekanalar/goose-url/actions/workflows/ci.yml)
 
-URL parsing and building for the Goose programming language. The rules
+URL parsing and building for the [Goose](https://github.com/aardappel/goose) programming language. The rules
 are RFC 3986.
 
 The package parses an absolute URL into its parts and rebuilds the text
