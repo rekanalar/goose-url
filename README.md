@@ -1,5 +1,7 @@
 # goose-url
 
+[![ci](https://github.com/rekanalar/goose-url/actions/workflows/ci.yml/badge.svg)](https://github.com/rekanalar/goose-url/actions/workflows/ci.yml)
+
 URL parsing and building for the Goose programming language. The rules
 are RFC 3986.
 
