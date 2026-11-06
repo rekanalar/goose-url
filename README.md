@@ -14,7 +14,7 @@ relative reference against a base URL. Pure Goose, no C.
 Add this to the root file of the program that uses it:
 
 ```goose
-import url from "rekanalar/goose-url@v0.1.0";
+import url from "rekanalar/goose-url@v0.1.1";
 ```
 
 ## API
