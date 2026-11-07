@@ -8,6 +8,7 @@ import os;
 import url from "..";
 import node_cases;
 import normalize_cases;
+import idna_cases;
 
 // expect_parse checks the parts of one URL.
 fn expect_parse(s: const u8[:], scheme: const u8[:], userinfo: const u8[:], host: const u8[:], port: i32, path: const u8[:], query: const u8[:], fragment: const u8[:]) {
@@ -659,9 +660,20 @@ fn test_normalize() {
     out = [];
     assert(!url::normalize(out, ""));
     assert(!url::normalize(out, "ftp"));
-    assert(!url::normalize(out, "mailto:a@b"));
-    assert(!url::normalize(out, "file:///x"));
-    assert(!url::normalize(out, "foo://A.b/x"));
+    expect_norm("mailto:a@b", "mailto:a@b");
+    expect_norm("file:///x", "file:///x");
+    expect_norm("foo://A.b/x", "foo://A.b/x");
+    // file: and non-special schemes.
+    expect_norm("file:c:\\x\\y", "file:///c:/x/y");
+    expect_norm("file://localhost/a", "file:///a");
+    expect_norm("file://host/a", "file://host/a");
+    expect_norm("file:///c|/x/../..", "file:///c:/");
+    expect_norm("foo://Host/a/../b", "foo://Host/b");
+    expect_norm("foo:a/../b", "foo:a/../b");
+    expect_norm("a:b c ?x", "a:b c%20?x");
+    expect_norm("foo:/..//x", "foo:/.//x");
+    assert(!url::normalize(out, "foo://:80/"));
+    assert(!url::normalize(out, "foo://u@/x"));
     assert(!url::normalize(out, "http://"));
     assert(!url::normalize(out, "http://////"));
     assert(!url::normalize(out, "http://?x"));
@@ -730,7 +742,22 @@ fn test_normalize() {
     assert(!url::normalize(out, "http://a%00b/"));
     assert(!url::normalize(out, "http://a|b/"));
     assert(!url::normalize(out, "http://a[2]b/"));
-    assert(!url::normalize(out, "http://m\xc3\xbcnchen.de/"));
+    // IDNA faults: bare xn--, bad Punycode, bidi, joiner, space.
+    assert(!url::normalize(out, "http://xn--/"));
+    assert(!url::normalize(out, "http://xn--a.com/"));
+    assert(!url::normalize(out, "http://\xd7\x90a.com/"));
+    assert(!url::normalize(out, "http://a\xe2\x80\x8db.com/"));
+    assert(!url::normalize(out, "http://a b\xc3\xbc.com/"));
+    assert(!url::normalize(out, "http://\xc3/"));
+    assert(out.len == 0);
+    // IDNA hosts.
+    expect_norm("http://m\xc3\xbcnchen.de/", "http://xn--mnchen-3ya.de/");
+    expect_norm("http://xn--mnchen-3ya.de/", "http://xn--mnchen-3ya.de/");
+    expect_norm("http://XN--TDA.com/", "http://xn--tda.com/");
+    expect_norm("http://\xc3\x9f.de/", "http://xn--zca.de/");
+    expect_norm("http://a\xc2\xad.com/", "http://a.com/");
+    expect_norm("http://\xef\xbc\xa1.com/", "http://a.com/");
+    expect_norm("http://%C3%BC.com/", "http://xn--tda.com/");
     // IPv6 canonical form.
     assert(url::normalize(out, "http://[0:0:1:0:0:0:0:1]/"));
     assert(out == "http://[0:0:1::1]/");
@@ -851,6 +878,167 @@ fn test_normalize_hostile() {
     assert(clock_ns() - t0 < 1000000000);
 }
 
+// expect_norm checks one normalize result.
+fn expect_norm(text: const u8[:], want: const u8[:]) {
+    var o: u8[>..] = [];
+    assert(url::normalize(o, text));
+    assert(o == want);
+}
+
+// expect_puny checks one RFC 3492 sample in both directions.
+fn expect_puny(text: const u8[:], code: const u8[:]) {
+    var a: u8[>..] = [];
+    assert(url::punycode_encode(a, text));
+    assert(a == code);
+    var b: u8[>..] = [];
+    assert(url::punycode_decode(b, code));
+    assert(b == text);
+}
+
+fn test_punycode() {
+    expect_puny("ليهمابتكلموشعربي؟", "egbpdaj6bu4bxfgehfvwxn");
+    expect_puny("他们为什么不说中文", "ihqwcrb4cv8a8dqg056pqjye");
+    expect_puny("他們爲什麽不說中文", "ihqwctvzc91f659drss3x8bo0yb");
+    expect_puny("Pročprostěnemluvíčesky", "Proprostnemluvesky-uyb24dma41a");
+    expect_puny("למההםפשוטלאמדבריםעברית", "4dbcagdahymbxekheh6e0a7fei0b");
+    expect_puny("なぜみんな日本語を話してくれないのか", "n8jok5ay5dzabd5bym9f0cm5685rrjetr6pdxa");
+    expect_puny("3年B組金八先生", "3B-ww4c5e180e575a65lsy2b");
+    expect_puny("安室奈美恵-with-SUPER-MONKEYS", "-with-SUPER-MONKEYS-pc58ag80a8qai00g7n9n");
+    expect_puny("Hello-Another-Way-それぞれの場所", "Hello-Another-Way--fc4qua05auwb3674vfr0b");
+    expect_puny("ひとつ屋根の下2", "2-u9tlzr9756bt3uc0v");
+    expect_puny("MajiでKoiする5秒前", "MajiKoi5-783gue6qz075azm5e");
+    expect_puny("パフィーdeルンバ", "de-jg4avhby1noc0d");
+    expect_puny("そのスピードで", "d9juau41awczczp");
+    // All-basic text encodes to itself and gets no delimiter.
+    var o: u8[>..] = [];
+    assert(url::punycode_encode(o, "abc"));
+    assert(o == "abc");
+    // Faults: bad digit, truncated number, overflow, bad UTF-8.
+    var d: u8[>..] = [];
+    assert(!url::punycode_decode(d, "a-!"));
+    assert(!url::punycode_decode(d, "a-9"));
+    assert(!url::punycode_decode(d, "99999999999999"));
+    assert(!url::punycode_decode(d, "\xC3\xBC-abc"));
+    var e: u8[>..] = [];
+    assert(!url::punycode_encode(e, "\xC3"));
+    assert(!url::punycode_encode(e, "\xED\xA0\x80"));
+    assert(e.len == 0);
+}
+
+fn test_href_helpers() {
+    // defrag, as urldefrag of Python: the first # splits.
+    let a, f = url::defrag("http://a/b#c#d");
+    assert(a == "http://a/b" && f == "c#d");
+    let a2, f2 = url::defrag("http://a/b");
+    assert(a2 == "http://a/b" && f2 == "");
+    // is_abs, as IsAbs of Go: a scheme in front.
+    assert(url::is_abs("http://a") && url::is_abs("a:b") && url::is_abs("mailto:x"));
+    assert(!url::is_abs("/x") && !url::is_abs("1a:b") && !url::is_abs("") && !url::is_abs(":x"));
+    // request_uri, as RequestURI of Go.
+    var o: u8[>..] = [];
+    let u1, ok1 = url::parse("http://a/p?q=1#f");
+    assert(ok1);
+    url::request_uri(o, u1);
+    assert(o == "/p?q=1");
+    o = [];
+    let u2, ok2 = url::parse("http://a");
+    assert(ok2);
+    url::request_uri(o, u2);
+    assert(o == "/");
+    o = [];
+    let u3, ok3 = url::parse("http://a?x");
+    assert(ok3);
+    url::request_uri(o, u3);
+    assert(o == "/?x");
+    // path_segments, as path_segments of Rust.
+    var segs: const u8[:][>..] = [];
+    assert(url::path_segments(segs, "/a/b/"));
+    assert(segs.len == 3 && segs[0] == "a" && segs[1] == "b" && segs[2] == "");
+    segs = [];
+    assert(url::path_segments(segs, "/"));
+    assert(segs.len == 1 && segs[0] == "");
+    segs = [];
+    assert(!url::path_segments(segs, "a/b"));
+    assert(!url::path_segments(segs, ""));
+    assert(segs.len == 0);
+    // can_parse, as URL.canParse of Node.
+    assert(url::can_parse("http://a"));
+    assert(!url::can_parse("a"));
+    assert(url::can_parse_base("b", "http://a/c"));
+    assert(!url::can_parse_base("b", "c"));
+    // resolve_href.
+    o = [];
+    assert(url::resolve_href(o, "../g", "http://a/b/c/d?q"));
+    assert(o == "http://a/b/g");
+    // The setters on text.
+    o = [];
+    assert(url::with_path(o, "http://a/x", "a b?c"));
+    assert(o == "http://a/a%20b%3Fc");
+    o = [];
+    assert(url::with_username(o, "http://h/", "u:v"));
+    assert(o == "http://u%3Av@h/");
+    o = [];
+    assert(!url::with_username(o, "file:///x", "u"));
+    assert(!url::with_port(o, "http://h/", "abc"));
+    assert(o.len == 0);
+}
+
+fn test_idna_hostile() {
+    // A host of 50000 labels, one of them Punycode.
+    var many: u8[>..] = [];
+    many.append("http://xn--tda.");
+    for i in 0..50000 { many.append("a."); }
+    many.append("b/");
+    var t = clock_ns();
+    var o: u8[>..] = [];
+    assert(url::normalize(o, many[..]));
+    assert(clock_ns() - t < 1000000000);
+    // A label of 100000 digits after xn--, which decodes to disallowed points.
+    var longx: u8[>..] = [];
+    longx.append("http://xn--");
+    for i in 0..100000 { longx.push('a'); }
+    longx.append("/");
+    t = clock_ns();
+    o = [];
+    assert(!url::normalize(o, longx[..]));
+    assert(clock_ns() - t < 1000000000);
+    // A label of 100000 non-ASCII code points.
+    var wide: u8[>..] = [];
+    wide.append("http://");
+    for i in 0..100000 { wide.append("\xc3\xa9"); }
+    wide.append("/");
+    t = clock_ns();
+    o = [];
+    assert(url::normalize(o, wide[..]));
+    assert(clock_ns() - t < 1000000000);
+    // A run of 100000 combining marks after a letter.
+    var marks: u8[>..] = [];
+    marks.append("http://a");
+    for i in 0..100000 { marks.append("\xcc\x81"); }
+    marks.append("/");
+    t = clock_ns();
+    o = [];
+    let mok = url::normalize(o, marks[..]);
+    assert(clock_ns() - t < 1000000000);
+    // Marks in descending class order force the sort.
+    var rev: u8[>..] = [];
+    rev.append("http://a");
+    for i in 0..50000 { rev.append("\xcc\xa7\xcc\x81"); }
+    rev.append("/");
+    t = clock_ns();
+    o = [];
+    let rok = url::normalize(o, rev[..]);
+    assert(clock_ns() - t < 1000000000);
+    // The same for the host of a file: URL and for a long hostile path.
+    t = clock_ns();
+    o = [];
+    var fh: u8[>..] = [];
+    fh.append("file://");
+    fh.append(wide[7..]);
+    let fok = url::normalize(o, fh[..]);
+    assert(clock_ns() - t < 1000000000);
+}
+
 fn main() {
     test_parse_full();
     test_parse_simple();
@@ -884,8 +1072,12 @@ fn main() {
     test_redacted();
     test_join_path();
     test_edit_hostile();
+    test_punycode();
+    test_href_helpers();
+    test_idna_hostile();
     test_node_cases();
     test_normalize();
+    idna_cases::test_idna_cases();
     test_normalize_hostile();
     print("all tests passed");
     return 0;
