@@ -66,3 +66,41 @@ fn decode(out: u8[>..]&, s: const u8[:], form: bool) -> bool {
     }
     return true;
 }
+
+// escape writes s into out. A byte stays when it is in the unreserved set
+// or in keep. A space becomes + when plus is true. Every other byte
+// becomes %XX.
+fn escape(out: u8[>..]&, s: const u8[:], keep: const u8[:], unreserved: bool, plus: bool) {
+    for c in s {
+        if plus && c == ' ' {
+            out.push('+');
+        } else if (unreserved && in_set(c, UNRESERVED)) || in_set(c, keep) {
+            out.push(c);
+        } else {
+            var buf: u8[3];
+            buf[0] = '%';
+            buf[1] = HEX[(c as i32) >> 4];
+            buf[2] = HEX[(c as i32) & 15];
+            out.append(buf[..]);
+        }
+    }
+}
+
+// quote is Python quote: the bytes of "/" and the unreserved set stay.
+fn quote(out: u8[>..]&, s: const u8[:]) { escape(out, s, "/", true, false); }
+
+// quote_plus is Python quote_plus: a space becomes +, and "/" is escaped.
+fn quote_plus(out: u8[>..]&, s: const u8[:]) { escape(out, s, "", true, true); }
+
+// query_escape is Go QueryEscape. It gives the same bytes as quote_plus.
+fn query_escape(out: u8[>..]&, s: const u8[:]) { escape(out, s, "", true, true); }
+
+// path_escape is Go PathEscape. The bytes $&+=:@ stay, "/" is escaped.
+fn path_escape(out: u8[>..]&, s: const u8[:]) { escape(out, s, "$&+=:@", true, false); }
+
+// form_encode is the application/x-www-form-urlencoded byte serializer of
+// the WHATWG standard, as in the Rust form_urlencoded crate. Only
+// letters, digits and *-._ stay, and ~ is escaped.
+fn form_encode(out: u8[>..]&, s: const u8[:]) {
+    escape(out, s, "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789*-._", false, true);
+}

@@ -157,6 +157,146 @@ fn test_decode_faults() {
     assert(!ok3);
 }
 
+fn expect_esc(got: const u8[:], want: const u8[:]) { assert(got == want); }
+
+// The expected texts come from Python 3 urllib.parse and Go 1.2x net/url
+// for the input "a b/c&d=e~é$@:,;?+*".
+fn test_escape_sets() {
+    const s = "a b/c&d=e~é$@:,;?+*";
+    var a: u8[>..] = [];
+    url::quote(a, s);
+    assert(a == "a%20b/c%26d%3De~%C3%A9%24%40%3A%2C%3B%3F%2B%2A");
+    var b: u8[>..] = [];
+    url::quote_plus(b, s);
+    assert(b == "a+b%2Fc%26d%3De~%C3%A9%24%40%3A%2C%3B%3F%2B%2A");
+    var c: u8[>..] = [];
+    url::query_escape(c, s);
+    assert(c == b[..]);
+    var d: u8[>..] = [];
+    url::path_escape(d, s);
+    assert(d == "a%20b%2Fc&d=e~%C3%A9$@:%2C%3B%3F+%2A");
+}
+
+// The Rust form_urlencoded byte_serialize keeps *-._ and escapes ~.
+fn test_form_encode() {
+    var a: u8[>..] = [];
+    url::form_encode(a, "k y/~*-._");
+    assert(a == "k+y%2F%7E*-._");
+}
+
+fn test_query_pairs() {
+    // Python parse_qsl with keep_blank_values and Go ParseQuery agree.
+    var ps: url::Pair[>..] = [];
+    let ok = url::query_pairs(ps, "a=1&b=x+y%20z&c&&a=2&d=%e2%82%ac");
+    assert(ok);
+    var n = 0;
+    for p in ps {
+        if n == 0 { assert(p.key == "a"); assert(p.value == "1"); }
+        if n == 1 { assert(p.key == "b"); assert(p.value == "x y z"); }
+        if n == 2 { assert(p.key == "c"); assert(p.value == ""); }
+        if n == 3 { assert(p.key == "a"); assert(p.value == "2"); }
+        if n == 4 { assert(p.key == "d"); assert(p.value == "€"); }
+        n += 1;
+    }
+    assert(n == 5);
+}
+
+fn test_query_pairs_fault() {
+    // Go ParseQuery skips the bad pair, reports the fault, and goes on.
+    var ps: url::Pair[>..] = [];
+    let ok = url::query_pairs(ps, "a=%zz&b=1");
+    assert(!ok);
+    var n = 0;
+    for p in ps { assert(p.key == "b"); n += 1; }
+    assert(n == 1);
+}
+
+fn test_query_get() {
+    var out: u8[>..] = [];
+    assert(url::query_get(out, "a=1&a=2&b=%41", "a"));
+    assert(out == "1");
+    out = [];
+    assert(url::query_get(out, "a=1&a=2&b=%41", "b"));
+    assert(out == "A");
+    assert(!url::query_get(out, "a=1", "z"));
+}
+
+fn test_append_pair() {
+    // Python urlencode([("k y","v/~*"),("é","")]) is
+    // k+y=v%2F~%2A&%C3%A9= ; the form set here escapes ~ as the Rust
+    // Serializer does.
+    var out: u8[>..] = [];
+    url::append_pair(out, "k y", "v/~*");
+    url::append_pair(out, "é", "");
+    assert(out == "k+y=v%2F%7E*&%C3%A9=");
+    var ps: url::Pair[>..] = [];
+    assert(url::query_pairs(ps, out[..]));
+}
+
+fn test_default_port() {
+    // The Rust port_or_known_default list.
+    assert(url::default_port("http") == 80);
+    assert(url::default_port("HTTPS") == 443);
+    assert(url::default_port("ws") == 80);
+    assert(url::default_port("wss") == 443);
+    assert(url::default_port("ftp") == 21);
+    assert(url::default_port("gopher") == -1);
+    let u, ok = url::parse("https://example.com/");
+    assert(ok);
+    assert(url::port_or_default(u) == 443);
+    let v, ok2 = url::parse("https://example.com:8443/");
+    assert(ok2);
+    assert(url::port_or_default(v) == 8443);
+}
+
+fn test_setters() {
+    var u, ok = url::parse("http://example.com/a?q=1#f");
+    assert(ok);
+    assert(url::set_scheme(u, "https"));
+    assert(url::set_host(u, "example.org"));
+    assert(url::set_port(u, "8443"));
+    assert(url::set_userinfo(u, "jim:pw"));
+    assert(url::set_path(u, "/x/y"));
+    assert(url::set_query(u, "a=b"));
+    assert(url::set_fragment(u, "top"));
+    var out: u8[>..] = [];
+    url::build(out, u);
+    assert(out == "https://jim:pw@example.org:8443/x/y?a=b#top");
+    assert(url::set_port(u, ""));
+    assert(url::set_query(u, ""));
+    assert(url::set_fragment(u, ""));
+    out = [];
+    url::build(out, u);
+    assert(out == "https://jim:pw@example.org/x/y");
+    assert(url::set_host(u, "::1"));
+    out = [];
+    url::build(out, u);
+    assert(out == "https://jim:pw@[::1]/x/y");
+}
+
+// Each bad value gives false and leaves the Url as it was.
+fn test_setter_faults() {
+    var u, ok = url::parse("http://example.com/a");
+    assert(ok);
+    assert(!url::set_scheme(u, "ht tp"));
+    assert(!url::set_scheme(u, "1http"));
+    assert(!url::set_scheme(u, ""));
+    assert(!url::set_host(u, "exa mple.com"));
+    assert(!url::set_host(u, "a/b"));
+    assert(!url::set_host(u, ""));
+    assert(!url::set_host(u, "a::zz"));
+    assert(!url::set_port(u, "99999"));
+    assert(!url::set_port(u, "80x"));
+    assert(!url::set_userinfo(u, "a@b"));
+    assert(!url::set_path(u, "/a?b"));
+    assert(!url::set_path(u, "rel"));
+    assert(!url::set_query(u, "a#b"));
+    assert(!url::set_fragment(u, "a b"));
+    var out: u8[>..] = [];
+    url::build(out, u);
+    assert(out == "http://example.com/a");
+}
+
 fn test_join_base() {
     expect_join("http://a/b/c/d;p?q", "../g", "http://a/b/g");
     expect_join("http://a/b/c/d;p?q", "../../g", "http://a/g");
@@ -226,6 +366,15 @@ fn main() {
     test_decode();
     test_decode_form();
     test_decode_faults();
+    test_escape_sets();
+    test_form_encode();
+    test_query_pairs();
+    test_query_pairs_fault();
+    test_query_get();
+    test_append_pair();
+    test_default_port();
+    test_setters();
+    test_setter_faults();
     test_join_base();
     test_join_absolute_base();
     test_join_faults();
