@@ -39,6 +39,13 @@ if ok {
 }
 ```
 
+## Test
+
+```bash
+goose run test/run.goose
+goose run examples/resolve.goose
+```
+
 ## License
 
 MIT
