@@ -3,7 +3,7 @@
 [![ci](https://github.com/rekanalar/goose-url/actions/workflows/ci.yml/badge.svg)](https://github.com/rekanalar/goose-url/actions/workflows/ci.yml)
 
 URL parsing and building for the [Goose](https://github.com/aardappel/goose) programming language. The rules
-are RFC 3986.
+are RFC 3986, and `normalize` follows WHATWG URL as Node applies it.
 
 The package parses an absolute URL into its parts and rebuilds the text
 from the parts. It encodes and decodes percent escapes. It joins a
@@ -11,14 +11,16 @@ relative reference against a base URL.
 
 It reads and writes query pairs and form bodies, and it edits a query. It
 gives the origin of a URL and hides its password. It joins path parts.
-It sets the parts of a URL with checked setters. Pure Goose, no C.
+It maps a Unicode host to Punycode with UTS 46 and NFC. It handles
+`file:` URLs and non-special schemes, and it converts between a `file:`
+URL and a path. Pure Goose, no C.
 
 ## Install
 
 Add this to the root file of the program that uses it:
 
 ```goose
-import url from "rekanalar/goose-url@v0.4.0";
+import url from "rekanalar/goose-url@v1.0.0";
 ```
 
 ## API
@@ -30,6 +32,22 @@ import url from "rekanalar/goose-url@v0.4.0";
 | `encode(out, s, safe)` | percent-encodes the bytes that a URL may not hold |
 | `decode(out, s, form)` | reverses the escapes; `form` makes `+` a space |
 | `join(out, base, ref)` | resolves one reference against one base URL |
+| `normalize(out, s)` | writes the Node `new URL(s).href` text; false and `out` unchanged when the URL is bad |
+| `resolve_href(out, ref, base)` | writes `new URL(ref, base).href` of Node |
+| `can_parse(s)` | true when `new URL(s)` of Node would succeed |
+| `can_parse_base(s, base)` | true when `new URL(s, base)` of Node would succeed |
+| `defrag(s)` | splits the text at the first `#`, as Python `urldefrag` |
+| `is_abs(s)` | true when the text holds a scheme, as Go `ParseRequestURI` checks |
+| `request_uri(out, u)` | writes path and query, as Go `RequestURI` |
+| `path_segments(out, path)` | splits an absolute path into segments, as Rust `path_segments` |
+| `domain_to_ascii(out, s)` | UTS 46 with Punycode, as Node `domainToASCII`; false on a bad domain |
+| `domain_to_unicode(out, s)` | reverses Punycode, as Node `domainToUnicode`; false on a bad domain |
+| `punycode_encode(out, s)` | RFC 3492 encode of UTF-8 text; false on a bad byte or overflow |
+| `punycode_decode(out, s)` | RFC 3492 decode to UTF-8; false on a bad digit or overflow |
+| `file_url_to_path(out, href, windows)` | Node `fileURLToPath` for the POSIX and the Windows form |
+| `path_to_file_url(out, path, windows)` | Node `pathToFileURL` for the POSIX and the Windows form |
+| `with_scheme`, `with_host`, `with_port`, `with_path`, `with_query`, `with_fragment` | write `href` with one part replaced; the value gets the encode set of the part |
+| `with_username`, `with_password` | write `href` with the userinfo part replaced; the value gets the userinfo encode set |
 | `query_pairs(out, q)` | decodes a query into `Pair` values; gives false after a bad escape |
 | `query_get(out, q, key)` | decodes the first value of a key; gives false when absent |
 | `append_pair(out, key, value)` | writes one form-encoded pair, with `&` in front when needed |
@@ -52,7 +70,6 @@ import url from "rekanalar/goose-url@v0.4.0";
 | `origin(out, u)` | writes `scheme://host[:port]`; false is the null origin |
 | `redacted(out, u)` | writes the URL with the password as `xxxxx` |
 | `join_path(out, base, elems)` | joins path parts, cleans dot segments; false when a part holds `?` or `#` |
-| `normalize(out, s)` | writes the Node `new URL(s).href` text for http, https, ws, wss and ftp; false and `out` unchanged when the URL is bad |
 | `set_scheme`, `set_host`, `set_port`, `set_userinfo`, `set_path`, `set_query`, `set_fragment` | check the value, then set it; give false and change nothing when it is bad |
 
 A `Url` holds `scheme`, `userinfo`, `host`, `port`, `port_text`, `path`,
@@ -98,36 +115,101 @@ Differences from Node:
 - `query_sort` compares key bytes. Node compares UTF-16 code units. The orders differ only for code points above U+FFFF.
 - A `blob:` URL has the null origin here. Node gives the origin of the inner URL.
 - A host or userinfo with a backslash has the null origin here. Node reads the backslash as a slash and gives the origin of the text before it.
-- `origin` lowers only ASCII. There is no IDNA, and an IPv6 address is not made canonical.
+- `origin` lowers only ASCII, and it reads no Punycode. An IPv6 address is not made canonical. Node runs IDNA in `origin`.
 
 ## Normalizing
 
-`normalize` follows Node `new URL(text).href`. It strips tab, LF and CR, and
-the outer spaces. It lowers the scheme and the host, and reads a backslash as a
-slash. It removes dot segments, including `%2e`, and an empty path becomes `/`.
-It drops a default or empty port, and it fails on a port above 65535.
+`normalize` follows Node `new URL(text).href`, release v22.22.1. It strips
+tab, LF and CR, and the outer spaces. It lowers the scheme and the host,
+and reads a backslash as a slash. It removes dot segments, including
+`%2e`, and an empty path becomes `/`. It drops a default or empty port,
+and it fails on a port above 65535.
 
 It writes IPv4 forms (hex, octal, short) as dotted decimal and IPv6 in canonical
-form. It encodes the path, query, fragment and userinfo with the sets that Node
-uses. It keeps an existing `%XX` and a bare `%`.
+form. It encodes the path, query, fragment and userinfo with the sets that
+WHATWG fixes. It keeps an existing `%XX` and a bare `%`.
+
+A host with a byte of 128 and up, or an `xn--` label, goes through
+IDNA. The steps are UTS 46 non-transitional mapping, NFC, Punycode,
+and the label checks of the URL parser of Node. The mapping and NFC
+tables are Unicode 17.0. The label-check tables copy ada 3.3.0, the
+parser that Node 22 holds.
+
+The `file:` scheme rules of WHATWG apply. They cover an empty host or
+`localhost`. They cover a drive letter on any platform. Backslashes
+act as slashes, and a lone first `..` segment stays. The other
+schemes are non-special. An opaque path keeps its text, a host gets no IDNA,
+and the encode sets stay WHATWG.
 
 ```goose
 var out: u8[>..] = [];
 url::normalize(out, "HTTP://Example.COM:80/a/./b/../c");   // http://example.com/a/c
+url::normalize(out, "http://münchen.de/");                 // http://xn--mnchen-3ya.de/
+url::normalize(out, "file:/c:/x/y");                       // file:///c:/x/y
 ```
 
-The test program holds 600 generated cases from Node v22.22.1. The script
-`test/make_normalize_cases.mjs` makes them. It has a fixed seed. Hand cases and
-a hostile-input timing test sit in `test/run.goose`.
+The test program holds 15144 generated cases from Node v22.22.1. The
+scripts `test/make_normalize_cases.mjs` and `test/make_idna_cases.mjs`
+make them. Both have the fixed seed 20261107. The count splits as
+12000 for `normalize` and 2000 for the host, file and href helpers.
+Another 1144 cover the `with_*` calls. The 600 older generated cases
+stay, and the hand and hostile-input timing cases sit in
+`test/run.goose`.
+
+## File paths
+
+`file_url_to_path` and `path_to_file_url` follow Node
+`fileURLToPath` and `pathToFileURL`. The `windows` flag picks the
+Windows form. A POSIX path starts with `/`. A Windows path needs a
+drive letter and a separator, as `C:\dir\file`. It may also be a UNC
+path with two backslashes, as `\\host\share\file`, or with two
+forward slashes, as `//host/share/file`.
+
+The path is resolved as Node resolves it. A `.` segment goes. A `..`
+segment drops the segment before it. An empty segment goes. A trailing
+separator stays.
+
+```goose
+var href: u8[>..] = [];
+url::path_to_file_url(href, "C:\\Users\\ada\\a b.txt", true);
+// file:///C:/Users/ada/a%20b.txt
+```
+
+## Setting a part
+
+The package holds two levels for edits:
+
+- `with_host(out, href, v)` reads the href text, encodes `v` with the
+  encode set of the part, and writes the new href. The rules are the
+  WHATWG rules that Node and Rust apply. The call gives false only when
+  WHATWG ignores the value.
+- `u.set_host(v)` checks the value and changes the part. The call
+  never encodes, because a `Url` holds slices. A slice cannot own
+  text that the call allocates. Give an already encoded value, or use
+  the `with_*` call.
+
+```goose
+var out: u8[>..] = [];
+url::with_path(out, "http://a/x", "a b?c");   // http://a/a%20b%3Fc
+```
+
+Before v1.0.0 the setters of a `Url` refused a byte that the part may
+not hold. No call encoded a value. From v1.0.0 the `with_*` calls
+encode the value. The setters still refuse it. Move a raw value from a
+setter to the matching `with_*` call.
 
 ## Limits
 
 - The package keeps no copy. A `Url` and a `Pair` hold slices, so the text must outlive them.
-- A setter refuses a bad byte. It never escapes the value. Call `escape` first.
+- A `Url` setter checks the value and never escapes it. Call `escape` first, or use `with_*`.
 - `parse` does not normalize. Call `normalize` for the canonical text.
-- `normalize` handles http, https, ws, wss and ftp only. There is no `file:` rule and no other scheme.
-- `normalize` has no IDNA. A host with a byte of 128 and up, or an `xn--` label, gives false. Node gives punycode.
-- A `Url` field set by hand skips the checks. Use the setters.
+- The IDNA tables are Unicode 17.0, and the label checks copy Node v22.22.1. A later Node can differ for new code points.
+- The script `test/check_idna_data.mjs` compares every code point with Node. It is a manual check. It is not part of CI.
+- `defrag` and `is_abs` read only ASCII. A scheme with a byte of 128 and up gives false. RFC 3986 allows such a scheme; Node, Rust, Go and Python refuse it.
+- `punycode_decode` refuses a basic code point from an insert, as RFC 3492 requires. It gives no reason text.
+- `path_to_file_url` refuses a relative path and a Windows path with no drive and no share. Node resolves such a path against the working directory, so the result then depends on it. The Rust `Url::from_file_path` refuses it too.
+- `path_to_file_url` gives `file:///C:/` for a drive root. Node on a POSIX host gives `file:///C://`. Node on Windows and Rust give `file:///C:/`.
+- Node stops the process for a UNC path with a server name that a URL may not hold. This package gives false.
 
 ## Test
 
