@@ -18,7 +18,7 @@ It sets the parts of a URL with checked setters. Pure Goose, no C.
 Add this to the root file of the program that uses it:
 
 ```goose
-import url from "rekanalar/goose-url@v0.3.0";
+import url from "rekanalar/goose-url@v0.4.0";
 ```
 
 ## API
@@ -52,6 +52,7 @@ import url from "rekanalar/goose-url@v0.3.0";
 | `origin(out, u)` | writes `scheme://host[:port]`; false is the null origin |
 | `redacted(out, u)` | writes the URL with the password as `xxxxx` |
 | `join_path(out, base, elems)` | joins path parts, cleans dot segments; false when a part holds `?` or `#` |
+| `normalize(out, s)` | writes the Node `new URL(s).href` text for http, https, ws, wss and ftp; false and `out` unchanged when the URL is bad |
 | `set_scheme`, `set_host`, `set_port`, `set_userinfo`, `set_path`, `set_query`, `set_fragment` | check the value, then set it; give false and change nothing when it is bad |
 
 A `Url` holds `scheme`, `userinfo`, `host`, `port`, `port_text`, `path`,
@@ -99,13 +100,33 @@ Differences from Node:
 - A host or userinfo with a backslash has the null origin here. Node reads the backslash as a slash and gives the origin of the text before it.
 - `origin` lowers only ASCII. There is no IDNA, and an IPv6 address is not made canonical.
 
+## Normalizing
+
+`normalize` follows Node `new URL(text).href`. It strips tab, LF and CR, and
+the outer spaces. It lowers the scheme and the host, and reads a backslash as a
+slash. It removes dot segments, including `%2e`, and an empty path becomes `/`.
+It drops a default or empty port, and it fails on a port above 65535.
+
+It writes IPv4 forms (hex, octal, short) as dotted decimal and IPv6 in canonical
+form. It encodes the path, query, fragment and userinfo with the sets that Node
+uses. It keeps an existing `%XX` and a bare `%`.
+
+```goose
+var out: u8[>..] = [];
+url::normalize(out, "HTTP://Example.COM:80/a/./b/../c");   // http://example.com/a/c
+```
+
+The test program holds 600 generated cases from Node v22.22.1. The script
+`test/make_normalize_cases.mjs` makes them. It has a fixed seed. Hand cases and
+a hostile-input timing test sit in `test/run.goose`.
+
 ## Limits
 
 - The package keeps no copy. A `Url` and a `Pair` hold slices, so the text must outlive them.
 - A setter refuses a bad byte. It never escapes the value. Call `escape` first.
-- The host is not normalized: no IDNA, no IPv4 check, and no lower case outside `origin`.
-- The path is not normalized in `parse`; only `join` removes dot segments.
-- There is no `file:` rule and no WHATWG special-scheme parsing.
+- `parse` does not normalize. Call `normalize` for the canonical text.
+- `normalize` handles http, https, ws, wss and ftp only. There is no `file:` rule and no other scheme.
+- `normalize` has no IDNA. A host with a byte of 128 and up, or an `xn--` label, gives false. Node gives punycode.
 - A `Url` field set by hand skips the checks. Use the setters.
 
 ## Test

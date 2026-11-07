@@ -19,3 +19,4 @@ import query;
 import set;
 import edit;
 import redact;
+import normalize;
