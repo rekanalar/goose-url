@@ -4,7 +4,9 @@
 // examples of RFC 3986 section 5.3.
 
 import std;
+import os;
 import url from "..";
+import node_cases;
 
 // expect_parse checks the parts of one URL.
 fn expect_parse(s: const u8[:], scheme: const u8[:], userinfo: const u8[:], host: const u8[:], port: i32, path: const u8[:], query: const u8[:], fragment: const u8[:]) {
@@ -352,6 +354,283 @@ fn test_large_url() {
     assert(u.path.len == 60001);
 }
 
+// Query editing. The expected texts come from Node URLSearchParams.
+fn expect_set(q: const u8[:], key: const u8[:], val: const u8[:], want: const u8[:], n: i64) {
+    var o: u8[>..] = [];
+    assert(url::query_set(o, q, key, val) == n);
+    assert(o == want);
+}
+
+fn expect_delete(q: const u8[:], key: const u8[:], want: const u8[:], n: i64) {
+    var o: u8[>..] = [];
+    assert(url::query_delete(o, q, key) == n);
+    assert(o == want);
+}
+
+fn expect_delete_pair(q: const u8[:], key: const u8[:], val: const u8[:], want: const u8[:], n: i64) {
+    var o: u8[>..] = [];
+    assert(url::query_delete_pair(o, q, key, val) == n);
+    assert(o == want);
+}
+
+fn expect_sort(q: const u8[:], want: const u8[:], n: i64) {
+    var o: u8[>..] = [];
+    assert(url::query_sort(o, q) == n);
+    assert(o == want);
+}
+
+fn test_query_edit() {
+    expect_set("a=1&b=2&a=3", "a", "9", "a=9&b=2", 2);
+    expect_set("a=1", "z", "y", "a=1&z=y", 0);
+    expect_set("", "a", "1", "a=1", 0);
+    expect_delete("a=1&b=2&a=3", "a", "b=2", 2);
+    expect_delete("a=1", "z", "a=1", 0);
+    expect_delete_pair("a=1&b=2&a=1&c=3", "a", "1", "b=2&c=3", 2);
+    expect_delete_pair("a=1&a=2", "a", "3", "a=1&a=2", 0);
+    expect_sort("b=2&a=1&b=0&a=3", "a=1&a=3&b=2&b=0", 4);
+    expect_sort("", "", 0);
+    // A bare key becomes a pair with an empty value.
+    expect_sort("b&a", "a=&b=", 2);
+    assert(url::query_has("a=1&b=2", "b"));
+    assert(!url::query_has("a=1&b=2", "c"));
+    assert(url::query_has_pair("a=1&a=2", "a", "2"));
+    assert(!url::query_has_pair("a=1&a=2", "a", "3"));
+    var ps: url::Pair[>..] = [];
+    assert(url::query_get_all(ps, "a=1&b=2&a=3", "a"));
+    assert(ps.len == 2);
+}
+
+fn test_query_edit_refuse() {
+    // Node keeps a broken escape as text. The package refuses it.
+    var o: u8[>..] = [];
+    assert(url::query_set(o, "a=%zz&b=1", "a", "2") == -1);
+    assert(url::query_delete(o, "a=%", "a") == -1);
+    assert(url::query_delete_pair(o, "a=%zz", "a", "1") == -1);
+    assert(url::query_sort(o, "b=1&a=%zz") == -1);
+    assert(o.len == 0);
+    assert(url::query_has("a=%zz&b=1", "b"));
+    assert(!url::query_has("a=%zz&b=1", "a"));
+    var ps: url::Pair[>..] = [];
+    assert(!url::query_get_all(ps, "a=%zz&b=1", "b"));
+    assert(ps.len == 1);
+}
+
+fn test_origin() {
+    let u, ok = url::parse("blob:https://a.com/x");
+    assert(ok);
+    var o: u8[>..] = [];
+    assert(!url::origin(o, u));
+    assert(o.len == 0);
+    let v, vok = url::parse("mailto:a@b.c");
+    assert(vok);
+    assert(!url::origin(o, v));
+    // Node reads a backslash as a slash: its origin is http://evil.com.
+    // The null origin is the safe answer.
+    let x, xok = url::parse("http://evil.com\\@good.com/");
+    assert(xok);
+    assert(!url::origin(o, x));
+    let y, yok = url::parse("http://evil.com\\.good.com/");
+    assert(yok);
+    assert(!url::origin(o, y));
+    assert(o.len == 0);
+    let w, wok = url::parse("http://[::1]:8080/");
+    assert(wok);
+    assert(url::origin(o, w));
+    assert(o == "http://[::1]:8080");
+}
+
+fn expect_redacted(text: const u8[:], want: const u8[:]) {
+    let u, ok = url::parse(text);
+    assert(ok);
+    var o: u8[>..] = [];
+    url::redacted(o, u);
+    assert(o == want);
+}
+
+// The rows come from Go 1.27 URL.Redacted.
+fn test_redacted() {
+    expect_redacted("https://user:secret@example.com/a", "https://user:xxxxx@example.com/a");
+    expect_redacted("https://user:@example.com/a", "https://user:xxxxx@example.com/a");
+    expect_redacted("https://:pw@example.com/", "https://:xxxxx@example.com/");
+    expect_redacted("https://user@example.com/a", "https://user@example.com/a");
+    expect_redacted("https://example.com/a?q=1#f", "https://example.com/a?q=1#f");
+}
+
+// expect_join_path joins the elements of text, split at spaces.
+fn expect_join_path(base: const u8[:], text: const u8[:], want: const u8[:]) {
+    let es = words(text);
+    var o: u8[>..] = [];
+    assert(url::join_path(o, base, es[..]));
+    assert(o == want);
+}
+
+fn expect_join_empty(base: const u8[:], first: const u8[:], want: const u8[:]) {
+    // words cannot make an empty element, so the list is built by hand.
+    var es: const u8[:][>..] = [];
+    es.push(first);
+    es.push("b");
+    var o: u8[>..] = [];
+    assert(url::join_path(o, base, es[..]));
+    assert(o == want);
+    var none: const u8[:][>..] = [];
+    o = [];
+    assert(url::join_path(o, base, none[..]));
+    if base == "" { assert(o == "/"); } else { assert(o == "/a"); }
+    o = [];
+    assert(url::join_path(o, "/a/", none[..]));
+    assert(o == "/a/");
+}
+
+// The rows come from Go 1.27 URL.JoinPath.
+fn test_join_path() {
+    expect_join_path("/a/b", "c .. d", "/a/b/d");
+    expect_join_path("/a/b/", "c", "/a/b/c");
+    expect_join_path("/a/b", "c/", "/a/b/c/");
+    expect_join_path("", "x", "/x");
+    expect_join_path("/a", "../..", "/");
+    expect_join_path("/a/", "b/..", "/a");
+    expect_join_path("/a", "b/../", "/a/");
+    expect_join_path("/a/b", ".", "/a/b");
+    expect_join_path("/a//b", "c", "/a/b/c");
+    expect_join_path("/a", "/b", "/a/b");
+    expect_join_path("/a", "//b", "/a/b");
+    expect_join_path("", ".. a", "/a");
+    expect_join_empty("/a", "", "/a/b");
+    expect_join_empty("", "", "/b");
+    // With no element, Go still cleans the base path.
+    var none: const u8[:][>..] = [];
+    var c: u8[>..] = [];
+    assert(url::join_path(c, "/a//b", none[..]));
+    assert(c == "/a/b");
+    c = [];
+    assert(url::join_path(c, "/a/./b/..", none[..]));
+    assert(c == "/a");
+    var o: u8[>..] = [];
+    let bad1 = words("b?c");
+    let bad2 = words("b#c");
+    let ok1 = words("b");
+    assert(!url::join_path(o, "/a", bad1[..]));
+    assert(!url::join_path(o, "/a", bad2[..]));
+    assert(!url::join_path(o, "/a?x", ok1[..]));
+    assert(o.len == 0);
+}
+
+// elapsed_ok checks one hostile call against the time bound of one second.
+fn elapsed_ok(start: i64) {
+    assert(clock_ns() - start < 1000000000);
+}
+
+fn test_edit_hostile() {
+    // 10000 pairs with 10000 distinct keys, in reverse order.
+    var q: u8[>..] = [];
+    var i = 9999;
+    while i >= 0 {
+        if q.len > 0 { q.push('&'); }
+        var key: u8[>..] = [];
+        key.append("k");
+        // A fixed width keeps the byte order equal to the number order.
+        var d = 1000;
+        while d > 0 { key.push(('0' + (i / d) % 10) as u8); d = d / 10; }
+        q.append(key[..]);
+        q.append("=v");
+        i -= 1;
+    }
+    var o: u8[>..] = [];
+    var t = clock_ns();
+    assert(url::query_sort(o, q[..]) == 10000);
+    elapsed_ok(t);
+    assert(o.len == q.len);
+    assert(o[0] == 'k' && o[1] == '0' && o[4] == '0');
+    // The order is right: sorting the sorted text changes nothing.
+    var again: u8[>..] = [];
+    assert(url::query_sort(again, o[..]) == 10000);
+    assert(again[..] == o[..]);
+    o = [];
+    t = clock_ns();
+    assert(url::query_set(o, q[..], "k0000", "x") == 1);
+    elapsed_ok(t);
+    o = [];
+    t = clock_ns();
+    assert(url::query_delete(o, q[..], "k0001") == 1);
+    elapsed_ok(t);
+    o = [];
+    t = clock_ns();
+    assert(url::query_delete_pair(o, q[..], "k0001", "v") == 1);
+    elapsed_ok(t);
+    assert(url::query_has(q[..], "k0000"));
+
+    // The read calls are linear too.
+    t = clock_ns();
+    assert(url::query_has(q[..], "k9999"));
+    assert(!url::query_has(q[..], "none"));
+    elapsed_ok(t);
+    t = clock_ns();
+    assert(url::query_has_pair(q[..], "k9999", "v"));
+    assert(!url::query_has_pair(q[..], "k9999", "w"));
+    elapsed_ok(t);
+    var found: url::Pair[>..] = [];
+    t = clock_ns();
+    assert(url::query_get_all(found, q[..], "k5000"));
+    elapsed_ok(t);
+    assert(found.len == 1);
+
+    // 10000 equal keys: set keeps one pair.
+    var eq: u8[>..] = [];
+    i = 0;
+    while i < 10000 {
+        if eq.len > 0 { eq.push('&'); }
+        eq.append("a=1");
+        i += 1;
+    }
+    o = [];
+    t = clock_ns();
+    assert(url::query_set(o, eq[..], "a", "2") == 10000);
+    elapsed_ok(t);
+    assert(o == "a=2");
+    var every: url::Pair[>..] = [];
+    t = clock_ns();
+    assert(url::query_get_all(every, eq[..], "a"));
+    elapsed_ok(t);
+    assert(every.len == 10000);
+    o = [];
+    assert(url::query_delete(o, eq[..], "a") == 10000);
+    assert(o.len == 0);
+
+    // A query of about 1 MB.
+    var big: u8[>..] = [];
+    while big.len < 1000000 { big.append("abcdefgh=1234567&"); }
+    o = [];
+    t = clock_ns();
+    assert(url::query_sort(o, big[..]) > 0);
+    elapsed_ok(t);
+
+    // join_path with 10000 elements, then with 10000 dot-dot elements.
+    var views: const u8[:][>..] = [];
+    i = 0;
+    while i < 10000 { views.push("s"); i += 1; }
+    o = [];
+    t = clock_ns();
+    assert(url::join_path(o, "/", views[..]));
+    elapsed_ok(t);
+    assert(o.len == 20000);
+    var ups: const u8[:][>..] = [];
+    i = 0;
+    while i < 10000 { ups.push(".."); i += 1; }
+    var all: const u8[:][>..] = [];
+    for v in views { all.push(v); }
+    for v in ups { all.push(v); }
+    o = [];
+    t = clock_ns();
+    assert(url::join_path(o, "/", all[..]));
+    elapsed_ok(t);
+    assert(o == "/");
+}
+
+fn test_node_cases() {
+    node_cases::check_queries();
+    node_cases::check_origins();
+}
+
 fn main() {
     test_parse_full();
     test_parse_simple();
@@ -379,6 +658,13 @@ fn main() {
     test_join_absolute_base();
     test_join_faults();
     test_large_url();
+    test_query_edit();
+    test_query_edit_refuse();
+    test_origin();
+    test_redacted();
+    test_join_path();
+    test_edit_hostile();
+    test_node_cases();
     print("all tests passed");
     return 0;
 }
