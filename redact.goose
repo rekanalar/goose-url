@@ -14,37 +14,81 @@ fn push_lower(out: u8[>..]&, s: const u8[:]) {
     }
 }
 
-fn has_byte(s: const u8[:], b: u8) -> bool {
-    for c in s {
-        if c == b { return true; }
-    }
-    return false;
-}
-
 // origin writes scheme://host[:port] into out and gives true. A URL of
 // another scheme than http, https, ws, wss and ftp, or with no host,
 // has the null origin: the result is false and out stays as it was. The
 // scheme and the host are in ASCII lower case. The port stays only when it
-// differs from the default port. A blob: URL gives the null origin here. So does a host or userinfo with a backslash.
+// differs from the default port. A blob: URL gives the origin of the URL
+// that its path holds. A special scheme reads a backslash as a slash, so
+// the authority ends at the first backslash.
 fn origin(out: u8[>..]&, u: const Url&) -> bool {
-    if default_port(u.scheme) < 0 || u.host.len == 0 { return false; }
-    // WHATWG reads a backslash as a slash in these schemes, so a host or
-    // userinfo with one has another origin in a browser. The parts are
-    // ambiguous, so give the null origin.
-    if has_byte(u.host, '\\') || has_byte(u.userinfo, '\\') { return false; }
-    push_lower(out, u.scheme);
-    out.append("://");
+    // A blob URL gives the origin of the URL that its path holds. The
+    // path is a part of the text of the URL, so the parts of the inner
+    // URL stay valid. A blob URL inside a blob URL has the null origin,
+    // as in Node.
+    var cur = u;
+    if same_lower(cur.scheme, "blob") {
+        let v, ok = parse(cur.path);
+        if !ok { return false; }
+        if same_lower(v.scheme, "blob") { return false; }
+        cur = v;
+    }
+    if default_port(cur.scheme) < 0 { return false; }
+    // Build the authority and cut it at the first backslash. A special
+    // scheme reads a backslash as a slash, so the authority ends there.
+    var auth: u8[>..] = [];
+    if cur.userinfo.len > 0 {
+        auth.append(cur.userinfo[..]);
+        auth.push('@');
+    }
+    // A host with a colon is an IPv6 address. The parser keeps the text
+    // without the brackets, so the authority needs them back.
     var v6 = false;
-    for c in u.host {
+    for c in cur.host {
         if c == ':' { v6 = true; }
     }
-    if v6 { out.push('['); }
-    push_lower(out, u.host);
-    if v6 { out.push(']'); }
-    if u.port >= 0 && u.port != default_port(u.scheme) {
-        out.push(':');
-        format(out, u.port);
+    if v6 {
+        auth.push('[');
+        auth.append(cur.host[..]);
+        auth.push(']');
+    } else {
+        auth.append(cur.host[..]);
     }
+    if cur.port_text.len > 0 {
+        auth.push(':');
+        auth.append(cur.port_text[..]);
+    }
+    var cut = auth.len;
+    for c, i in auth {
+        if c == '\\' { cut = i; break; }
+    }
+    let user, host, port, pt, ok = split_host(auth[..cut]);
+    if !ok || host.len == 0 { return false; }
+    // The text goes into a buffer of its own, so a fault leaves the
+    // buffer of the caller as it was.
+    var text: u8[>..] = [];
+    push_lower(text, cur.scheme);
+    text.append("://");
+    // A host with a colon is an IPv6 address. It keeps its text.
+    for c in host {
+        if c == ':' { v6 = true; }
+    }
+    if v6 {
+        text.push('[');
+        push_lower(text, host);
+        text.push(']');
+    } else {
+        // The IDNA rules give the host in ASCII lower case and in the
+        // Punycode form.
+        var h: u8[>..] = [];
+        if !domain_to_ascii(h, host[..]) { return false; }
+        push_lower(text, h[..]);
+    }
+    if port >= 0 && port != default_port(cur.scheme) {
+        text.push(':');
+        format(text, port);
+    }
+    out.append(text[..]);
     return true;
 }
 

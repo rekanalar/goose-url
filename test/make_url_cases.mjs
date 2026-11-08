@@ -1,0 +1,145 @@
+#!/usr/bin/env node
+// Makes test/url_cases.goose for goose-url from Node URLSearchParams and URL.
+//
+// Usage, in the package directory:
+//   node test/make_url_cases.mjs > test/url_cases.goose
+//
+// Every case holds the result that Node gave. The Goose test compares the
+// result of the package with it. The seed is fixed, so the output is
+// stable. The count of cases goes to standard error.
+'use strict';
+
+// A small seeded generator, so the output does not change.
+let state = 20261108;
+function rnd() {
+  state = (state + 0x6D2B79F5) | 0;
+  let t = Math.imul(state ^ (state >>> 15), 1 | state);
+  t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+  return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+}
+const int = (n) => Math.floor(rnd() * n);
+const pick = (a) => a[int(a.length)];
+
+// The raw forms of a key and of a value. The list holds the broken
+// escapes and the byte sequences that are not valid UTF-8.
+const KEYS = ['a', 'b', 'k', 'A', '', '%41', 'k+y', 'k%20y', '%C3%A9', 'é', '𐀀', '＀', '￿',
+  '%', '%z', '%zz', '%2', '%C3', '%80', '%E0%80', '%E2%82', '%ED%A0%80', '%C3%28'];
+const VALS = ['', '1', '2', 'x+y', 'x%20y', '%C3%A9', 'é', 'a%26b', '%3D', '~', '*-._', '!()', 'abc',
+  '%', '%z', '%zz', '%2', '%C3', '%80', '%E0%80', '%E2%82', '%ED%A0%80', '%C3%28'];
+
+function query() {
+  const n = int(6);
+  const parts = [];
+  for (let i = 0; i < n; i++) {
+    const k = pick(KEYS), v = pick(VALS);
+    // A bare key has no equals sign.
+    parts.push(int(6) === 0 && k !== '' ? k : `${k}=${v}`);
+  }
+  return parts.join('&');
+}
+
+// The texts of the origins. The list holds the blob URLs, the URLs with
+// a backslash, the hosts with non-ASCII text and the IPv6 hosts.
+const URLS = [
+  'blob:https://example.com/uuid', 'blob:http://example.com:8080/uuid',
+  'blob:https://example.com:8443/u', 'blob:data:text/plain,x', 'blob:not a url',
+  'blob:', 'blob:file:///a/b', 'blob:mailto:a@b.c', 'blob:blob:https://example.com/u',
+  'http://evil.com\\@good.com/', 'http://evil.com\\.good.com/', 'http://u\\v@example.com/',
+  'http://a\\b/', 'http://a\\b:8080/', 'http://a:p\\b@example.com/', 'http://ex\\ample.com/',
+  'http://exämple.com/', 'http://EXÄMPLE.com/', 'http://xn--exmple-cua.com/',
+  'http://ex%c3%a4mple.com/', 'http://%41.com/', 'http://a..b/', 'http://a_b/',
+  'http://[::1]/', 'http://[::1]:8080/', 'http://u:p@[::1]/', 'http://u@[2001:db8::1]/',
+  'https://example.com/', 'https://example.com:443/', 'http://example.com:80/',
+  'ftp://example.com/', 'ws://example.com/', 'wss://example.com/', 'http://EXAMPLE.com/',
+  'http://example.com./', 'http://example.com:0/', 'mailto:a@b.c', 'data:text/plain,x',
+];
+
+const q = (s) => JSON.stringify(s);
+const out = [];
+const w = (s) => out.push(s);
+const count = { query: 0, origin: 0 };
+
+w('// Cases made by test/make_url_cases.mjs with Node ' + process.version + '.');
+w('// Do not edit by hand. Make the file again with the script.');
+w('');
+w('namespace url_cases;');
+w('');
+w('import std;');
+w('import url from "..";');
+w('');
+
+w('fn query_case(qs: const u8[:], key: const u8[:], val: const u8[:], has: bool, has_pair: bool,');
+w('        all: const u8[:], set_text: const u8[:], set_n: i64, del_text: const u8[:], del_n: i64,');
+w('        dp_text: const u8[:], dp_n: i64, sort_text: const u8[:], sort_n: i64) {');
+w('    assert(url::query_has(qs, key) == has);');
+w('    assert(url::query_has_pair(qs, key, val) == has_pair);');
+w('    var ps: url::Pair[>..] = [];');
+w('    assert(url::query_get_all(ps, qs, key));');
+w('    var joined: u8[>..] = [];');
+w('    for p, i in ps {');
+w('        if i > 0 { joined.push(\'|\'); }');
+w('        joined.append(p.value);');
+w('    }');
+w('    assert(joined[..] == all);');
+w('    var o: u8[>..] = [];');
+w('    assert(url::query_set(o, qs, key, val) == set_n);');
+w('    assert(o[..] == set_text);');
+w('    o = [];');
+w('    assert(url::query_delete(o, qs, key) == del_n);');
+w('    assert(o[..] == del_text);');
+w('    o = [];');
+w('    assert(url::query_delete_pair(o, qs, key, val) == dp_n);');
+w('    assert(o[..] == dp_text);');
+w('    o = [];');
+w('    assert(url::query_sort(o, qs) == sort_n);');
+w('    assert(o[..] == sort_text);');
+w('}');
+w('');
+
+w('fn origin_case(text: const u8[:], want: const u8[:]) {');
+w('    let u, ok = url::parse(text);');
+w('    assert(ok);');
+w('    var o: u8[>..] = [];');
+w('    let got = url::origin(o, u);');
+w('    if want == "null" {');
+w('        assert(!got);');
+w('        assert(o.len == 0);');
+w('    } else {');
+w('        assert(got);');
+w('        assert(o[..] == want);');
+w('    }');
+w('}');
+w('');
+
+w('fn check_queries() {');
+for (let i = 0; i < 1600; i++) {
+  const qs = query();
+  const key = pick(KEYS), val = pick(VALS);
+  const P = () => new URLSearchParams(qs);
+  const has = P().has(key);
+  const hasPair = P().has(key, val);
+  const all = P().getAll(key).join('|');
+  const nKey = P().getAll(key).length;
+  const nPair = [...P()].filter(([k, v]) => k === key && v === val).length;
+  const nAll = [...P()].length;
+  const s = P(); s.set(key, val);
+  const d = P(); d.delete(key);
+  const dp = P(); dp.delete(key, val);
+  const so = P(); so.sort();
+  w(`    query_case(${q(qs)}, ${q(key)}, ${q(val)}, ${has}, ${hasPair}, ${q(all)}, ${q(s.toString())}, ${nKey}, ${q(d.toString())}, ${nKey}, ${q(dp.toString())}, ${nPair}, ${q(so.toString())}, ${nAll});`);
+  count.query++;
+}
+w('}');
+w('');
+
+w('fn check_origins() {');
+for (const text of URLS) {
+  let want;
+  try { want = new URL(text).origin; } catch (e) { continue; }
+  w(`    origin_case(${q(text)}, ${q(want)});`);
+  count.origin++;
+}
+w('}');
+
+process.stdout.write(out.join('\n') + '\n');
+process.stderr.write('cases: ' + JSON.stringify(count) + ' total=' + (count.query + count.origin) + '\n');

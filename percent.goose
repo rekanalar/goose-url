@@ -67,6 +67,122 @@ fn decode(out: u8[>..]&, s: const u8[:], form: bool) -> bool {
     return true;
 }
 
+// decode_form writes s into out as the urlencoded parser of the URL
+// Standard does. A plus sign becomes a space. A percent sign that no two
+// hex digits follow stays as it is. A part of the text that is not valid
+// UTF-8 becomes the replacement character U+FFFD.
+fn decode_form(out: u8[>..]&, s: const u8[:]) {
+    var raw: u8[>..] = [];
+    var i = 0;
+    while i < s.len {
+        let c = s[i];
+        if c == '+' {
+            raw.push(' ');
+            i += 1;
+        } else if c == '%' && i + 2 < s.len {
+            let hi, ok1 = hex_value(s[i + 1]);
+            let lo, ok2 = hex_value(s[i + 2]);
+            if ok1 && ok2 {
+                raw.push((hi * 16 + lo) as u8);
+                i += 3;
+            } else {
+                raw.push('%');
+                i += 1;
+            }
+        } else {
+            raw.push(c);
+            i += 1;
+        }
+    }
+    utf8_replace(out, raw[..]);
+}
+
+// utf8_replace writes s into out. Each part of s that is not valid UTF-8
+// becomes the replacement character U+FFFD. The rules are the UTF-8
+// decoder of the URL Standard. A part that ends too early is one part,
+// so a byte of the part is not read twice.
+fn utf8_replace(out: u8[>..]&, s: const u8[:]) {
+    var i = 0;
+    while i < s.len {
+        let c = s[i];
+        if c < 0x80 {
+            out.push(c);
+            i += 1;
+            continue;
+        }
+        // The lead byte gives the length of the sequence and the bounds
+        // of the byte that follows it.
+        var need = 0;
+        var lo = 0x80;
+        var hi = 0xBF;
+        if c >= 0xC2 && c <= 0xDF {
+            need = 1;
+        } else if c == 0xE0 {
+            need = 2;
+            lo = 0xA0;
+        } else if c >= 0xE1 && c <= 0xEC {
+            need = 2;
+        } else if c == 0xED {
+            need = 2;
+            hi = 0x9F;
+        } else if c >= 0xEE && c <= 0xEF {
+            need = 2;
+        } else if c == 0xF0 {
+            need = 3;
+            lo = 0x90;
+        } else if c >= 0xF1 && c <= 0xF3 {
+            need = 3;
+        } else if c == 0xF4 {
+            need = 3;
+            hi = 0x8F;
+        } else {
+            push_replacement(out);
+            i += 1;
+            continue;
+        }
+        // The bytes that follow must be in their bounds. The first byte
+        // that is out of its bounds ends the part.
+        var j = 1;
+        var ok = true;
+        while j <= need {
+            if i + j >= s.len {
+                ok = false;
+                break;
+            }
+            let b = s[i + j];
+            var blo = 0x80;
+            var bhi = 0xBF;
+            if j == 1 {
+                blo = lo;
+                bhi = hi;
+            }
+            if b < blo || b > bhi {
+                ok = false;
+                break;
+            }
+            j += 1;
+        }
+        if !ok {
+            push_replacement(out);
+            i += j;
+            continue;
+        }
+        var k = 0;
+        while k <= need {
+            out.push(s[i + k]);
+            k += 1;
+        }
+        i += need + 1;
+    }
+}
+
+// push_replacement writes the replacement character U+FFFD into out.
+fn push_replacement(out: u8[>..]&) {
+    out.push(0xEF);
+    out.push(0xBF);
+    out.push(0xBD);
+}
+
 // escape writes s into out. A byte stays when it is in the unreserved set
 // or in keep. A space becomes + when plus is true. Every other byte
 // becomes %XX.

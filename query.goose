@@ -15,10 +15,10 @@ struct Pair {
 
 // query_pairs decodes every key=value pair of q into out. Pairs split at
 // &. An empty piece is skipped. A key without = gets an empty value, as
-// in Go ParseQuery and the Rust query_pairs. A + is a space. A pair
-// with a broken escape is skipped and the result is false, as in Go.
+// in Go ParseQuery and the Rust query_pairs. A + is a space. A pair with a
+// broken escape keeps the text, as Node and Python do. The call gives
+// true.
 fn query_pairs(out: Pair[>..]&, q: const u8[:]) -> bool {
-    var all_ok = true;
     var pos = 0;
     while pos <= q.len {
         var end = pos;
@@ -32,19 +32,17 @@ fn query_pairs(out: Pair[>..]&, q: const u8[:]) -> bool {
         }
         var k: u8[>..] = [];
         var v: u8[>..] = [];
-        var ok = decode(k, piece[..eq], true);
+        decode_form(k, piece[..eq]);
         if eq < piece.len {
-            let vok = decode(v, piece[eq + 1..], true);
-            ok = ok && vok;
+            decode_form(v, piece[eq + 1..]);
         }
-        if !ok { all_ok = false; continue; }
         out.push(Pair { key: k[..], value: v[..] });
     }
-    return all_ok;
+    return true;
 }
 
 // query_get decodes the first value of key in q into out. It gives false
-// when the key is absent or the value has a broken escape. Go Get.
+// when the key is absent. Go Get.
 fn query_get(out: u8[>..]&, q: const u8[:], key: const u8[:]) -> bool {
     var pairs: Pair[>..] = [];
     query_pairs(pairs, q);

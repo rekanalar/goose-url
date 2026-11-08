@@ -7,6 +7,7 @@ import std;
 import os;
 import url from "..";
 import node_cases;
+import url_cases;
 import normalize_cases;
 import idna_cases;
 
@@ -205,14 +206,16 @@ fn test_query_pairs() {
     assert(n == 5);
 }
 
-fn test_query_pairs_fault() {
-    // Go ParseQuery skips the bad pair, reports the fault, and goes on.
+fn test_query_pairs_broken() {
+    // Node and Python keep a broken escape as text. The pair stays.
     var n = 0;
     var ps: url::Pair[>..] = [];
-    let ok = url::query_pairs(ps, "a=%zz&b=1");
-    assert(!ok);
-    for p in ps { assert(p.key == "b"); n += 1; }
-    assert(n == 1);
+    assert(url::query_pairs(ps, "a=%zz&b=1"));
+    for p in ps {
+        if p.key == "a" { assert(p.value == "%zz"); }
+        n += 1;
+    }
+    assert(n == 2);
 }
 
 fn test_query_get() {
@@ -402,41 +405,105 @@ fn test_query_edit() {
     assert(ps.len == 2);
 }
 
-fn test_query_edit_refuse() {
-    // Node keeps a broken escape as text. The package refuses it.
+fn test_query_edit_broken() {
+    // Node keeps a broken escape as text, so the edit works.
     var o: u8[>..] = [];
-    assert(url::query_set(o, "a=%zz&b=1", "a", "2") == -1);
-    assert(url::query_delete(o, "a=%", "a") == -1);
-    assert(url::query_delete_pair(o, "a=%zz", "a", "1") == -1);
-    assert(url::query_sort(o, "b=1&a=%zz") == -1);
-    assert(o.len == 0);
+    assert(url::query_set(o, "a=%zz&b=1", "a", "2") == 1);
+    assert(o == "a=2&b=1");
+    o = [];
+    assert(url::query_delete(o, "a=%", "a") == 1);
+    assert(o == "");
+    o = [];
+    assert(url::query_delete_pair(o, "a=%zz", "a", "1") == 0);
+    assert(o == "a=%25zz");
+    o = [];
+    assert(url::query_sort(o, "b=1&a=%zz") == 2);
+    assert(o == "a=%25zz&b=1");
     assert(url::query_has("a=%zz&b=1", "b"));
-    assert(!url::query_has("a=%zz&b=1", "a"));
+    assert(url::query_has("a=%zz&b=1", "a"));
     var ps: url::Pair[>..] = [];
-    assert(!url::query_get_all(ps, "a=%zz&b=1", "b"));
+    assert(url::query_get_all(ps, "a=%zz&b=1", "b"));
     assert(ps.len == 1);
 }
 
+fn test_query_invalid_utf8() {
+    // A byte that is not valid UTF-8 becomes the replacement character.
+    var out: u8[>..] = [];
+    assert(url::query_get(out, "a=%80", "a"));
+    assert(out == "�");
+    out = [];
+    assert(url::query_get(out, "a=%C3%28", "a"));
+    assert(out == "�(");
+    out = [];
+    assert(url::query_get(out, "a=%E2%82", "a"));
+    assert(out == "�");
+    var ps: url::Pair[>..] = [];
+    assert(url::query_get_all(ps, "a=%E0%80", "a"));
+    assert(ps.len == 1);
+    for p in ps { assert(p.value == "��"); }
+}
+
+fn test_origin_rules() {
+    // A blob URL inside a blob URL has the null origin, as in Node.
+    let n, nok = url::parse("blob:blob:https://a.com/x");
+    assert(nok);
+    var o: u8[>..] = [];
+    assert(!url::origin(o, n));
+    assert(o.len == 0);
+    // An IPv6 host keeps its brackets, also with a userinfo.
+    let v, vok = url::parse("http://u:p@[::1]/");
+    assert(vok);
+    o = [];
+    assert(url::origin(o, v));
+    assert(o == "http://[::1]");
+    // A host that the IDNA rules refuse has the null origin.
+    let b, bok = url::parse("http://xn--a/");
+    assert(bok);
+    o = [];
+    assert(!url::origin(o, b));
+    assert(o.len == 0);
+    // The host of the origin runs the IDNA rules.
+    let i, iok = url::parse("http://exämple.com/");
+    assert(iok);
+    o = [];
+    assert(url::origin(o, i));
+    assert(o == "http://xn--exmple-cua.com");
+    // The port after the backslash does not reach the origin.
+    let p, pok = url::parse("http://a\\b:80/");
+    assert(pok);
+    o = [];
+    assert(url::origin(o, p));
+    assert(o == "http://a");
+}
+
 fn test_origin() {
+    // A blob URL gives the origin of the URL that its path holds.
     let u, ok = url::parse("blob:https://a.com/x");
     assert(ok);
     var o: u8[>..] = [];
-    assert(!url::origin(o, u));
+    assert(url::origin(o, u));
+    assert(o == "https://a.com");
+    let b, bok = url::parse("blob:data:text/plain,x");
+    assert(bok);
+    o = [];
+    assert(!url::origin(o, b));
     assert(o.len == 0);
     let v, vok = url::parse("mailto:a@b.c");
     assert(vok);
     assert(!url::origin(o, v));
-    // Node reads a backslash as a slash: its origin is http://evil.com.
-    // The null origin is the safe answer.
+    // Node reads a backslash as a slash, so the authority ends there.
     let x, xok = url::parse("http://evil.com\\@good.com/");
     assert(xok);
-    assert(!url::origin(o, x));
+    assert(url::origin(o, x));
+    assert(o == "http://evil.com");
     let y, yok = url::parse("http://evil.com\\.good.com/");
     assert(yok);
-    assert(!url::origin(o, y));
-    assert(o.len == 0);
+    o = [];
+    assert(url::origin(o, y));
+    assert(o == "http://evil.com");
     let w, wok = url::parse("http://[::1]:8080/");
     assert(wok);
+    o = [];
     assert(url::origin(o, w));
     assert(o == "http://[::1]:8080");
 }
@@ -631,6 +698,8 @@ fn test_edit_hostile() {
 fn test_node_cases() {
     node_cases::check_queries();
     node_cases::check_origins();
+    url_cases::check_queries();
+    url_cases::check_origins();
     normalize_cases::check_normalize();
 }
 
@@ -1056,7 +1125,7 @@ fn main() {
     test_escape_sets();
     test_form_encode();
     test_query_pairs();
-    test_query_pairs_fault();
+    test_query_pairs_broken();
     test_query_get();
     test_append_pair();
     test_default_port();
@@ -1067,8 +1136,10 @@ fn main() {
     test_join_faults();
     test_large_url();
     test_query_edit();
-    test_query_edit_refuse();
+    test_query_edit_broken();
+    test_query_invalid_utf8();
     test_origin();
+    test_origin_rules();
     test_redacted();
     test_join_path();
     test_edit_hostile();
