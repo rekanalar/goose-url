@@ -708,7 +708,7 @@ fn test_node_cases() {
 fn test_normalize() {
     var out: u8[>..] = [];
 
-    // US1: the canonical text.
+    // The canonical text.
     assert(url::normalize(out, "HTTP://Example.COM:80/a/../b/./c"));
     assert(out == "http://example.com/b/c");
     out = [];
@@ -773,7 +773,7 @@ fn test_normalize() {
     assert(out == "http://example.com/");
     out = [];
 
-    // US2: the host rules.
+    // The host rules.
     assert(url::normalize(out, "HTTP://A.B:80/X"));
     assert(out == "http://a.b/X");
     out = [];
@@ -847,7 +847,7 @@ fn test_normalize() {
     assert(!url::normalize(out, "http://[1:2:3:4:5:6:7]/"));
     assert(!url::normalize(out, "http://[1:2:3:4:5:6:7:8::]/"));
 
-    // US3: the userinfo and the port.
+    // The userinfo and the port.
     assert(url::normalize(out, "http://a@b@c.d/"));
     assert(out == "http://a%40b@c.d/");
     out = [];
