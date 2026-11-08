@@ -110,7 +110,7 @@ jobs:
 
       - uses: actions/setup-node@v5
         with:
-          node-version: "22"
+          node-version: "24.22.2"
 
       - name: Compare every code point with Node
         run: |

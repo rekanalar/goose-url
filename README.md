@@ -151,7 +151,7 @@ A host with a byte of 128 and up, or an `xn--` label, goes through
 IDNA. The steps are UTS 46 non-transitional mapping, NFC, Punycode,
 and the label checks of the URL parser of Node. The mapping and NFC
 tables are Unicode 17.0. The label-check tables copy ada 3.3.0, the
-parser that Node 22 holds.
+URL parser of Node 23 and later.
 
 The `file:` scheme rules of WHATWG apply. They cover an empty host or
 `localhost`. They cover a drive letter on any platform. Backslashes
@@ -225,8 +225,9 @@ setter to the matching `with_*` call.
 - A `Url` setter checks the value and never escapes it. Call `escape` first, or use `with_*`.
 - `parse` does not normalize. Call `normalize` for the canonical text.
 - `parse` follows RFC 3986. A URL with a port and a backslash after it, such as `http://a:b\c/`, gives no URL. A browser reads the backslash as a slash and takes the host and the port of the text before it.
-- The IDNA tables are Unicode 17.0, and the label checks copy Node v22.22.1. A later Node can differ for new code points.
-- The script `test/check_idna_data.mjs` compares every code point with Node. The CI runs it on both Goose releases, so the tables hold for every release.
+- The IDNA tables are Unicode 17.0, and the label checks copy ada 3.3.0. A later Unicode version can differ for new code points.
+- The references disagree on 10682 code points. Most came with Unicode 16 and 17, such as the Egyptian hieroglyphs U+13460 to U+143FA. The URL Standard fixes no Unicode version. Node 22 (ada 2.9.2) and the Rust `url` crate 2.5.8 refuse them. Node 24 to 26 (ada 3.3.0 and later) accept them, and so does this package. Python `idna` 3.11 accepts 4986 of them and refuses 5696.
+- The script `test/check_idna_data.mjs` compares every code point with Node 24.22.2. The CI runs it on both Goose releases. Node 22 differs on the 10682 code points above.
 - `defrag` and `is_abs` read only ASCII. A scheme with a byte of 128 and up gives false. RFC 3986 3.1 restricts a scheme to ASCII, and Node, Rust, Go and Python refuse it too.
 - `punycode_decode` refuses a basic code point from an insert, as RFC 3492 requires. It gives no reason text.
 - `path_to_file_url` refuses a relative path and a Windows path with no drive and no share. Node resolves such a path against the working directory, so the result then depends on it. The Rust `Url::from_file_path` refuses it too.
