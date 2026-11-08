@@ -20,7 +20,7 @@ URL and a path. Pure Goose, no C.
 Add this to the root file of the program that uses it:
 
 ```goose
-import url from "rekanalar/goose-url@v1.0.0";
+import url from "rekanalar/goose-url@v2.0.0";
 ```
 
 ## API
@@ -48,7 +48,7 @@ import url from "rekanalar/goose-url@v1.0.0";
 | `path_to_file_url(out, path, windows)` | Node `pathToFileURL` for the POSIX and the Windows form |
 | `with_scheme`, `with_host`, `with_port`, `with_path`, `with_query`, `with_fragment` | write `href` with one part replaced; the value gets the encode set of the part |
 | `with_username`, `with_password` | write `href` with the userinfo part replaced; the value gets the userinfo encode set |
-| `query_pairs(out, q)` | decodes a query into `Pair` values; gives false after a bad escape |
+| `query_pairs(out, q)` | decodes a query into `Pair` values; gives true |
 | `query_get(out, q, key)` | decodes the first value of a key; gives false when absent |
 | `append_pair(out, key, value)` | writes one form-encoded pair, with `&` in front when needed |
 | `encode_pairs(out, pairs)` | writes all pairs in form encoding |
@@ -63,11 +63,11 @@ import url from "rekanalar/goose-url@v1.0.0";
 | `query_has(q, key)` | true when a pair has the key |
 | `query_has_pair(q, key, value)` | true when a pair has the key and the value |
 | `query_get_all(out, q, key)` | collects the pairs of a key into a `Pair` list |
-| `query_set(out, q, key, value)` | first pair of the key takes the value, others go, absent key appends; gives the old count or -1 |
-| `query_delete(out, q, key)` | removes every pair of the key; gives the count or -1 |
-| `query_delete_pair(out, q, key, value)` | removes every pair with the key and the value; gives the count or -1 |
-| `query_sort(out, q)` | stable sort by key bytes; gives the pair count or -1 |
-| `origin(out, u)` | writes `scheme://host[:port]`; false is the null origin |
+| `query_set(out, q, key, value)` | first pair of the key takes the value, others go, absent key appends; gives the old count |
+| `query_delete(out, q, key)` | removes every pair of the key; gives the count |
+| `query_delete_pair(out, q, key, value)` | removes every pair with the key and the value; gives the count |
+| `query_sort(out, q)` | stable sort by the UTF-16 code units of the key; gives the pair count |
+| `origin(out, u)` | writes `scheme://host[:port]`; the host stands in Punycode; false is the null origin |
 | `redacted(out, u)` | writes the URL with the password as `xxxxx` |
 | `join_path(out, base, elems)` | joins path parts, cleans dot segments; false when a part holds `?` or `#` |
 | `set_scheme`, `set_host`, `set_port`, `set_userinfo`, `set_path`, `set_query`, `set_fragment` | check the value, then set it; give false and change nothing when it is bad |
@@ -105,26 +105,35 @@ rules follow Node `URL.origin`. The redaction and join rules follow Go
 - `join_path` keeps a trailing `/` when the last part ends in `/`. It never escapes.
 - With no part, `join_path` still cleans the base path, as Go does.
 
-The test program holds 583 cases from Node v22. The script `test/make_node_cases.js`
-makes them: 420 for the query calls and 163 for the origin. The script has a
-fixed seed. The Go rules have hand cases from Go 1.27.
+The test program holds 2220 cases from Node v22. The script
+`test/make_node_cases.js` makes 583 of them: 420 for the query calls and
+163 for the origin. The script `test/make_url_cases.mjs` makes 1637 more:
+1600 for the query calls and 37 for the origin. Both scripts have a fixed
+seed. The Go rules have hand cases from Go 1.27.
 
-Gaps against the URL Standard:
+## The URL Standard
 
-The URL Standard of WHATWG decides each behavior below. The package
-takes its rules in a later release. Today it differs from Node:
+The URL Standard of WHATWG decides the rules of the query parser and of
+the origin. The package takes these rules from v2.0.0.
 
-- A broken escape makes an edit give -1 and write nothing. Node writes
-  the replacement character for the bad byte and keeps the rest.
-- `query_sort` compares key bytes. The standard compares UTF-16 code
-  units. The orders differ only for code points above U+FFFF.
-- A `blob:` URL has the null origin here. The standard gives the origin
-  of the inner URL, and Node does.
-- A host or userinfo with a backslash has the null origin here. The
-  standard reads a backslash as a slash in a special scheme. Node
-  gives the origin of the text before it.
-- `origin` lowers only ASCII, and it reads no Punycode. The standard
-  runs IDNA in `origin`, and Node gives the Punycode form.
+- A query edit keeps a percent sign that no two hex digits follow. Node
+  and Python keep it too. Go `ParseQuery` fails on it.
+- A decoded key or a decoded value holds the replacement character
+  U+FFFD for each part that is not valid UTF-8. Node, Python and Rust do
+  the same. Go keeps the raw byte.
+- `query_sort` compares the keys by their UTF-16 code units. Node does
+  the same. Go `Values.Encode` compares the bytes of the key. The two
+  orders differ for a code point above U+FFFF.
+- A `blob:` URL gives the origin of the URL that its path holds. Node and
+  Rust do the same. A `blob:` URL inside a `blob:` URL has the null
+  origin, as in Node.
+- A special scheme reads a backslash as a slash, so the authority ends at
+  the first backslash. The origin names the text before it. Node and Rust
+  do the same. Python `urlsplit` names the host after the backslash, and
+  Go refuses the URL.
+- The origin runs the IDNA rules, so the host stands in ASCII lower case
+  and in the Punycode form. Node and Rust do the same. Go keeps the raw
+  host.
 
 ## Normalizing
 
@@ -209,9 +218,13 @@ setter to the matching `with_*` call.
 
 ## Limits
 
+- Before v2.0.0 a query edit gave -1 and wrote nothing when the query held a broken escape. Now the edit works and keeps the text. A caller that checks the count for -1 must drop that check.
+- Before v2.0.0 `query_sort` compared the bytes of the key. Now it compares the UTF-16 code units. The order changes for a key with a code point above U+FFFF.
+- Before v2.0.0 the origin of a `blob:` URL was the null origin. The origin of a URL with a backslash was the null origin too. The origin of a host with non-ASCII text held the raw host. Now the origin follows the standard.
 - The package keeps no copy. A `Url` and a `Pair` hold slices, so the text must outlive them.
 - A `Url` setter checks the value and never escapes it. Call `escape` first, or use `with_*`.
 - `parse` does not normalize. Call `normalize` for the canonical text.
+- `parse` follows RFC 3986. A URL with a port and a backslash after it, such as `http://a:b\c/`, gives no URL. A browser reads the backslash as a slash and takes the host and the port of the text before it.
 - The IDNA tables are Unicode 17.0, and the label checks copy Node v22.22.1. A later Node can differ for new code points.
 - The script `test/check_idna_data.mjs` compares every code point with Node. It is a manual check. It is not part of CI.
 - `defrag` and `is_abs` read only ASCII. A scheme with a byte of 128 and up gives false. RFC 3986 3.1 restricts a scheme to ASCII, and Node, Rust, Go and Python refuse it too.
@@ -220,12 +233,41 @@ setter to the matching `with_*` call.
 - `path_to_file_url` gives `file:///C:/` for a drive root. Node on a POSIX host gives `file:///C://`. Node on Windows and Rust give `file:///C:/`.
 - Node stops the process for a UNC path with a server name that a URL may not hold. This package gives false.
 
+## Security
+
+The package parses text from people we do not know. These protections go
+beyond the reference libraries.
+
+- The origin of a URL with a backslash names the host that a browser
+  uses. Python `urlsplit` names the host after the backslash, so a
+  program that trusts that host falls for it. This package follows the
+  standard and Node.
+- A decoded query key or value holds the replacement character U+FFFD for
+  each part that is not valid UTF-8. Go keeps the raw byte, and a program
+  that writes the raw byte into a page can break it.
+
+These risks stay.
+
+- The package writes the URL text as it is. It does not remove the
+  `javascript:` scheme or the `data:` scheme, because the standard keeps
+  them. A program that writes a URL into HTML must check the scheme. The
+  `goose-markdown` package does this for the links that it renders.
+- `parse` follows RFC 3986 and does not apply the rules of the standard.
+  The host of a URL with a backslash stays as the parser read it. Call
+  `normalize` for the text that a browser uses.
+- The IDNA tables are Unicode 17.0. A host with a code point that a later
+  Unicode adds may differ from a browser.
+
 ## Test
 
 ```bash
 goose run test/run.goose
 goose run examples/resolve.goose
 goose run examples/edit.goose
+goose run examples/query.goose
+goose run examples/normalize.goose
+goose run examples/idna.goose
+goose run examples/file.goose
 ```
 
 ## License
