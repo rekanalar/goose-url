@@ -109,13 +109,22 @@ The test program holds 583 cases from Node v22. The script `test/make_node_cases
 makes them: 420 for the query calls and 163 for the origin. The script has a
 fixed seed. The Go rules have hand cases from Go 1.27.
 
-Differences from Node:
+Gaps against the URL Standard:
 
-- A broken escape makes an edit give -1 and write nothing. Node keeps the text.
-- `query_sort` compares key bytes. Node compares UTF-16 code units. The orders differ only for code points above U+FFFF.
-- A `blob:` URL has the null origin here. Node gives the origin of the inner URL.
-- A host or userinfo with a backslash has the null origin here. Node reads the backslash as a slash and gives the origin of the text before it.
-- `origin` lowers only ASCII, and it reads no Punycode. An IPv6 address is not made canonical. Node runs IDNA in `origin`.
+The URL Standard of WHATWG decides each behavior below. The package
+takes its rules in a later release. Today it differs from Node:
+
+- A broken escape makes an edit give -1 and write nothing. Node writes
+  the replacement character for the bad byte and keeps the rest.
+- `query_sort` compares key bytes. The standard compares UTF-16 code
+  units. The orders differ only for code points above U+FFFF.
+- A `blob:` URL has the null origin here. The standard gives the origin
+  of the inner URL, and Node does.
+- A host or userinfo with a backslash has the null origin here. The
+  standard reads a backslash as a slash in a special scheme. Node
+  gives the origin of the text before it.
+- `origin` lowers only ASCII, and it reads no Punycode. The standard
+  runs IDNA in `origin`, and Node gives the Punycode form.
 
 ## Normalizing
 
@@ -205,7 +214,7 @@ setter to the matching `with_*` call.
 - `parse` does not normalize. Call `normalize` for the canonical text.
 - The IDNA tables are Unicode 17.0, and the label checks copy Node v22.22.1. A later Node can differ for new code points.
 - The script `test/check_idna_data.mjs` compares every code point with Node. It is a manual check. It is not part of CI.
-- `defrag` and `is_abs` read only ASCII. A scheme with a byte of 128 and up gives false. RFC 3986 allows such a scheme; Node, Rust, Go and Python refuse it.
+- `defrag` and `is_abs` read only ASCII. A scheme with a byte of 128 and up gives false. RFC 3986 3.1 restricts a scheme to ASCII, and Node, Rust, Go and Python refuse it too.
 - `punycode_decode` refuses a basic code point from an insert, as RFC 3492 requires. It gives no reason text.
 - `path_to_file_url` refuses a relative path and a Windows path with no drive and no share. Node resolves such a path against the working directory, so the result then depends on it. The Rust `Url::from_file_path` refuses it too.
 - `path_to_file_url` gives `file:///C:/` for a drive root. Node on a POSIX host gives `file:///C://`. Node on Windows and Rust give `file:///C:/`.
