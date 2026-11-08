@@ -226,7 +226,7 @@ setter to the matching `with_*` call.
 - `parse` does not normalize. Call `normalize` for the canonical text.
 - `parse` follows RFC 3986. A URL with a port and a backslash after it, such as `http://a:b\c/`, gives no URL. A browser reads the backslash as a slash and takes the host and the port of the text before it.
 - The IDNA tables are Unicode 17.0, and the label checks copy Node v22.22.1. A later Node can differ for new code points.
-- The script `test/check_idna_data.mjs` compares every code point with Node. It is a manual check. It is not part of CI.
+- The script `test/check_idna_data.mjs` compares every code point with Node. The CI runs it on both Goose releases, so the tables hold for every release.
 - `defrag` and `is_abs` read only ASCII. A scheme with a byte of 128 and up gives false. RFC 3986 3.1 restricts a scheme to ASCII, and Node, Rust, Go and Python refuse it too.
 - `punycode_decode` refuses a basic code point from an insert, as RFC 3492 requires. It gives no reason text.
 - `path_to_file_url` refuses a relative path and a Windows path with no drive and no share. Node resolves such a path against the working directory, so the result then depends on it. The Rust `Url::from_file_path` refuses it too.

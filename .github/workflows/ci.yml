@@ -79,3 +79,43 @@ jobs:
         run: |
           text=$(tail -c 2000 test-output.txt 2>/dev/null | sed -e 's/%/%25/g' -e 's/\r/%0D/g' | tr '\n' '%0A')
           echo "::error title=The tests failed::${text}"
+
+  idna:
+    name: idna tables against node
+    strategy:
+      fail-fast: false
+      matrix:
+        tag: [v2026.3, v2026.4]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install the Goose release
+        run: |
+          set -euo pipefail
+          dest="$RUNNER_TEMP/goose"
+          mkdir -p "$dest"
+          tag="${{ matrix.tag }}"
+          url="https://github.com/aardappel/goose/releases/download/${tag}/goose-${tag}-linux-x64.tar.gz"
+          curl -fsSL "$url" -o "$dest/goose.tar.gz"
+          tar -xzf "$dest/goose.tar.gz" -C "$dest"
+          exe=$(find "$dest" -type f -name goose | head -1)
+          chmod +x "$exe"
+          echo "$(dirname "$exe")" >> "$GITHUB_PATH"
+          "$exe" --help | head -3
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+
+      - name: Compare every code point with Node
+        run: |
+          set -euo pipefail
+          goose build -o "$RUNNER_TEMP/idna_dump" test/idna_dump.goose
+          "$RUNNER_TEMP/idna_dump" | node test/check_idna_data.mjs
+        env:
+          GOOSE_HOME: ${{ runner.temp }}/goose-home
