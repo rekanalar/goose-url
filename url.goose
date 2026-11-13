@@ -20,6 +20,7 @@ import set;
 import edit;
 import redact;
 import normalize;
+import host_address;
 import punycode;
 import idna_data;
 import idna;
